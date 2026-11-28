@@ -36,7 +36,7 @@ class UnlockCheckInTest {
         vault.ownerCheck.value = OwnerCheckView(
             OwnerCheckState.HELD, Instant.now().minusSeconds(60), 86_400, 0, hold = true, holdOffUntil = null,
         )
-        val vm = UnlockViewModel(vault, vault, vault, FakeReleaseNotes())
+        val vm = unlockOnTestClock(vault)
         advanceUntilIdle()
         return vm
     }
@@ -51,7 +51,7 @@ class UnlockCheckInTest {
 
     @Test
     fun withoutSavedStateOnlyThePin() = runTest {
-        val vm = UnlockViewModel(vault, vault, vault, FakeReleaseNotes())
+        val vm = unlockOnTestClock(vault)
         advanceUntilIdle()
         assertFalse(vm.uiState.value.checkDue)
         vm.setPin("40281795")

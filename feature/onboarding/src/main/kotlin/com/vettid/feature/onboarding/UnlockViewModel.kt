@@ -393,17 +393,30 @@ class UnlockViewModel @Inject constructor(
     val uiState: StateFlow<UnlockUiState> = state.asStateFlow()
     private var ticker: Job? = null
 
-    /** (#19722) Whether the screen is started ([setVisible]): only then is the owner check judged again as time passes. */
+    /** (#19722) Whether the screen is started and composed ([setVisible]): only then is the owner check judged again as time passes. */
     private val visible = MutableStateFlow(false)
 
-    /** Whether the daily check is due at [now] by the time it is judged on: the deadline passed, or the idle lock's time. */
-    private fun dueAt(now: Instant): Boolean =
-        ownerCheck.ownerCheck.value?.gated(now) == true || ownerCheck.idleLockedNow(now) != null
+    /**
+     * [s] with the owner check judged at [now], one judgement for the screen's re-judging and for the tap: due when the
+     * deadline passed, the vault was locked by the checks, or the idle lock's time passed (which also says why it locked).
+     * (ANDROID-PLAN 0.1.95) A lock found by a read, cause unknown: locked, but not "ten wrong checks"; the password is asked
+     * for only what is used, and a lock of unknown cause is not a check that is due.
+     */
+    private fun judged(s: UnlockUiState, now: Instant): UnlockUiState {
+        val locked = ownerCheck.lockedByOwnerCheck.value && !ownerCheck.lockCauseUnknown.value
+        val idle = ownerCheck.idleLockedNow(now)
+        val due = ownerCheck.ownerCheck.value?.gated(now) == true
+        return s.copy(checkDue = due || locked || idle != null, lockedByOwnerCheck = locked, idleLocked = idle)
+    }
 
-    /** The screen's ON_START (true) and ON_STOP (false). */
+    /** The screen's start (true), and its stop or its leaving the composition (false). */
     fun setVisible(shown: Boolean) {
         visible.value = shown
     }
+
+    /** Whether the screen counts as shown ([setVisible]); for the screen's own wiring test. */
+    @androidx.annotation.VisibleForTesting
+    internal val shown: Boolean get() = visible.value
 
     /**
      * The wall clock the owner check's times are judged against; tests set a virtual one before the first collection. A
@@ -444,24 +457,14 @@ class UnlockViewModel @Inject constructor(
         viewModelScope.launch {
             combine(
                 ownerCheck.ownerCheck, ownerCheck.lockedByOwnerCheck, ownerCheck.idleLocked, ownerCheck.lockCauseUnknown,
-            ) { v, locked, _, unknown -> Triple(v, locked, unknown) }
-                .combine(visible) { t, shown -> t to shown }
-                .collectLatest { (t, shown) ->
-                    val (v, locked, unknown) = t
+            ) { v, _, _, _ -> v }
+                .combine(visible) { v, shown -> v to shown }
+                .collectLatest { (v, shown) ->
                     // (#19722) Judged again when the deadline or the idle lock's time passes while the screen is shown,
                     // and at each return to it: the view is kept across a lock, but the time it is judged at moves on.
                     while (true) {
                         val now = clock()
-                        val due = v?.gated(now) == true
-                        val idle = ownerCheck.idleLockedNow(now)
-                        // (ANDROID-PLAN 0.1.95) A lock found by a read, cause unknown: locked, but not "ten wrong checks".
-                        // The password is asked for only what is used: a lock of unknown cause is not a check that is due.
-                        state.update {
-                            it.copy(
-                                checkDue = due || (locked && !unknown) || idle != null, lockedByOwnerCheck = locked && !unknown,
-                                idleLocked = idle,
-                            )
-                        }
+                        state.update { judged(it, now) }
                         // Away from the screen nothing waits: a return judges again.
                         val next = nextJudgement(v, now)?.takeIf { shown } ?: break
                         // In steps of at most [JUDGE_STEP_MS]: a delay does not run in deep sleep, the deadline's clock does.
@@ -583,8 +586,9 @@ class UnlockViewModel @Inject constructor(
         if (!s.submitAllowed || s.erasing) return
         // (#19722) Judged again at the tap: a check that came due since the screen last judged asks for the password first,
         // and nothing is sent yet.
-        if (!s.checkDue && dueAt(clock())) {
-            state.update { it.copy(checkDue = true) }
+        val now = clock()
+        if (!s.checkDue && judged(s, now).checkDue) {
+            state.update { judged(it, now) }
             return
         }
         state.update { it.copy(busy = true, message = null) }

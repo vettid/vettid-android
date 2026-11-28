@@ -28,12 +28,20 @@ class UnlockDeadlineTest {
     val main = MainDispatcherRule()
 
     private val vault = FakeVault(AppPhase.Locked)
-    private val start = Instant.parse("2026-11-28T12:00:00Z")
+    /**
+     * Long before the real clock: a code path that read the real clock in place of [UnlockViewModel.clock] finds every time
+     * here passed, so it fails at once rather than waiting forever in virtual time for a time that never comes.
+     */
+    private val start = Instant.parse("2000-01-01T00:00:00Z")
+
+    /** Wall-clock time that passed with no virtual time (deep sleep: the clock moves on, a delay does not). */
+    private var slept = 0L
 
     /** The view model on a virtual wall clock that moves with the test's time. */
     private fun TestScope.unlock(): UnlockViewModel =
         UnlockViewModel(vault, vault, vault, FakeReleaseNotes()).also { vm ->
-            vm.clock = { start.plusMillis(testScheduler.currentTime) }
+            vm.clock = { start.plusMillis(testScheduler.currentTime + slept) }
+            vault.clock = vm.clock
         }
 
     private fun okUntil(deadline: Instant, idleLockAt: Instant? = null) = OwnerCheckView(
@@ -56,6 +64,21 @@ class UnlockDeadlineTest {
         assertTrue("the password with the PIN", vm.uiState.value.checkDue)
         vm.setPin("40281795")
         assertFalse("the PIN alone no longer unlocks", vm.uiState.value.submitAllowed)
+        vm.setVisible(false)
+    }
+
+    /** A deadline passed in deep sleep: judged within one step once the phone wakes, not when the long delay ends. */
+    @Test
+    fun aDeadlinePassedInDeepSleepIsJudgedWithinAStep() = runTest {
+        vault.ownerCheck.value = okUntil(start.plusSeconds(3_600))
+        val vm = unlock()
+        vm.setVisible(true)
+        runCurrent()
+        assertFalse(vm.uiState.value.checkDue)
+        slept = 3_600_000
+        advanceTimeBy(JUDGE_STEP_MS)
+        runCurrent()
+        assertTrue(vm.uiState.value.checkDue)
         vm.setVisible(false)
     }
 
@@ -111,6 +134,63 @@ class UnlockDeadlineTest {
         vm.submit()
         runCurrent()
         assertTrue("now the unlock with the check", vault.calls.any { it.startsWith("unlockWithCheck") })
+    }
+
+    /** The same at the tap with only the idle lock's time passed (the deadline still ahead): and the screen says why. */
+    @Test
+    fun aTapPastTheIdleLockTimeAsksForThePasswordFirst() = runTest {
+        vault.ownerCheck.value = okUntil(start.plusSeconds(86_400), idleLockAt = start.plusSeconds(120))
+        val vm = unlock()
+        runCurrent()
+        vm.setPin("40281795")
+        assertTrue(vm.uiState.value.submitAllowed)
+        advanceTimeBy(120_000)
+        vm.submit()
+        runCurrent()
+        assertTrue(vm.uiState.value.checkDue)
+        assertTrue("why it locked", vm.uiState.value.idleLocked != null)
+        assertFalse("nothing sent", vault.calls.any { it.startsWith("unlock") })
+    }
+
+    /** A lock by the checks that came after the screen last judged: the tap asks for the password first. */
+    @Test
+    fun aTapAfterALockByTheChecksAsksForThePasswordFirst() = runTest {
+        val vm = unlock()
+        runCurrent()
+        vm.setPin("40281795")
+        vault.lockedByOwnerCheck.value = true // not judged by the screen yet: no runCurrent before the tap
+        vm.submit()
+        assertTrue(vm.uiState.value.checkDue)
+        assertTrue(vm.uiState.value.lockedByOwnerCheck)
+        runCurrent()
+        assertFalse("nothing sent", vault.calls.any { it.startsWith("unlock") })
+    }
+
+    /** (ANDROID-PLAN 0.1.95) A lock a read found, cause unknown: locked, but not "ten wrong checks", and no password asked. */
+    @Test
+    fun aLockOfUnknownCauseAsksForThePinOnly() = runTest {
+        vault.lockedByOwnerCheck.value = true
+        vault.lockCauseUnknown.value = true
+        val vm = unlock()
+        runCurrent()
+        assertFalse(vm.uiState.value.lockedByOwnerCheck)
+        assertFalse(vm.uiState.value.checkDue)
+    }
+
+    /** A second tap with no password after the ask: still nothing sent. */
+    @Test
+    fun aSecondTapWithoutThePasswordSendsNothing() = runTest {
+        vault.ownerCheck.value = okUntil(start.plusSeconds(600))
+        val vm = unlock()
+        runCurrent()
+        vm.setPin("40281795")
+        advanceTimeBy(600_000)
+        vm.submit()
+        runCurrent()
+        vm.submit()
+        runCurrent()
+        assertFalse(vm.uiState.value.submitAllowed)
+        assertFalse("nothing sent", vault.calls.any { it.startsWith("unlock") })
     }
 
     @Test
