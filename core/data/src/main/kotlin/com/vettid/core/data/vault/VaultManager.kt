@@ -1205,6 +1205,17 @@ class VaultManager(
         )
     }
 
+    /**
+     * (#19721 b′) A request unanswered although its deposit went out: the vault may have gone away without `vault.locking`.
+     * The owner check's probe finds out, and shows the vault locked when the member API says so ([VaultGoneWatch]).
+     */
+    private val vaultGone = VaultGoneWatch(
+        scope,
+        watching = { phaseFlow.value == AppPhase.Unlocked && ownerCheck.inFront.value },
+        probe = { ownerCheck.probeVault(lockCauseKnown = false) == VaultProbe.LOCKED },
+        elapsedMs = { android.os.SystemClock.elapsedRealtime() },
+    )
+
     /** (Rule 3) A passed owner check's waiting-asks replay that came due while the release gate paused the work. */
     private val heldAskReplay = HeldAskReplay()
 
@@ -1783,6 +1794,7 @@ class VaultManager(
                 // (ANDROID-PLAN §4 "While pending") Nothing but the lock and a pending `call.end` leaves the outbox while a lock is
                 // pending: asked by the device before each deposit of an entry, for every flush (its collection start's too).
                 device.sendGate = lockGuard.sendGate()
+                device.onNoAnswer = vaultGone::onNoAnswer
                 val api = VaultApi(device) { local.phone.inUse }
                 // §11.14.9 step 2: no credential operation while a PIN or password change is undecided.
                 api.setCredentialGate { carriesPin -> changes.gate(carriesPin) }

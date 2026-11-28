@@ -5275,6 +5275,29 @@ class VaultDeviceTest {
     }
 
     /**
+     * (#19721 b′) A request whose deposit went out and got no answer tells [VaultDevice.onNoAnswer] its type (the vault may
+     * have gone away); one the lock gate held (nothing sent) does not.
+     */
+    @Test
+    fun anUnansweredRequestIsToldAndAHeldOneIsNot() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val (d, v) = pairedDevice(this)
+            val told = java.util.Collections.synchronizedList(mutableListOf<String>())
+            d.onNoAnswer = { told += it }
+            val e = runCatching { d.requestOnce("vault.status", timeout = java.time.Duration.ofMillis(300)) }.exceptionOrNull()
+            assertTrue("$e", e is VaultStateException)
+            v.open(nextDeposit().second) // it went out
+            assertEquals(listOf("vault.status"), told.toList())
+
+            d.sendGate = VaultDevice.SendGate { false }
+            val held = runCatching { d.requestOnce("vault.status", timeout = java.time.Duration.ofMillis(300)) }.exceptionOrNull()
+            assertTrue("$held", held != null && held.heldByLockGate)
+            assertEquals("a held send is not told", listOf("vault.status"), told.toList())
+            d.sendGate = VaultDevice.SendGate { true }
+        }
+    }
+
+    /**
      * A lock must never land late (the member may have opened the vault again): it is deposited once, with an
      * `exp`, never from the outbox; and one that an earlier version of the app left in the outbox is dropped.
      */
