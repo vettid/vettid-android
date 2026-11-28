@@ -103,12 +103,13 @@ class VaultGoneWiringTest {
             "suspend fun opened(afterMissedClose: Boolean) {",
             "unlockAgainHold.opened(stillOpen = phaseFlow.value == AppPhase.Unlocked)",
         )
-        // The decisions themselves are UnlockAgainHold's pure functions (UnlockAgainHoldTest).
-        inBlock(
-            "private suspend fun evaluate(): AppPhase = guard {",
-            "UnlockAgainHold.opens(VaultDeletion.statusUnlocked(st.state), unlockAgainHold.holds)",
+        // The decisions themselves are UnlockAgainHold's pure functions (UnlockAgainHoldTest); their two call sites exactly,
+        // so that a negation, swapped branches or another term there fails here.
+        block("private suspend fun evaluate(): AppPhase = guard {").has(
+            "if (UnlockAgainHold.opens(VaultDeletion.statusUnlocked(st.state), unlockAgainHold.holds)) " +
+                "afterUnlocked(s) else AppPhase.Locked",
         )
-        inBlock("private fun takesEvents(): Boolean", "UnlockAgainHold.takesEvents(lockGuard.takesEvents(), unlockAgainHold.holds)")
+        code.has("private fun takesEvents(): Boolean = UnlockAgainHold.takesEvents(lockGuard.takesEvents(), unlockAgainHold.holds)")
         // Every phase is told to the hold, which decides (UnlockAgainHoldTest.onlySignedOutAndASetupEndIt).
         code.has("unlockAgainHold.onPhase(p)")
         // The unlock's result ends it and restarts the count before the phase is published.

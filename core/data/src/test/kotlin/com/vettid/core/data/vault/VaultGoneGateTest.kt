@@ -63,5 +63,8 @@ class VaultGoneGateTest {
         assertNull(VaultGoneGate.counted(ProbeFacts(VaultProbe.NO_ANSWER, apiAnswered = true, refused = true)))
         // Stale (a lock, a wipe or an unlock during it): nothing, even with the API's answer.
         assertNull(VaultGoneGate.counted(ProbeFacts(VaultProbe.NO_ANSWER, apiAnswered = true, stale = true)))
+        // Stale before found: a stale probe that found the vault open or locked counts for nothing either.
+        assertNull(VaultGoneGate.counted(ProbeFacts(VaultProbe.OPEN, apiAnswered = true, stale = true)))
+        assertNull(VaultGoneGate.counted(ProbeFacts(VaultProbe.LOCKED, apiAnswered = true, stale = true)))
     }
 }
