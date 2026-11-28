@@ -26,7 +26,25 @@ class VaultGoneWatchTest {
             false
         },
         elapsedMs = { now },
+        ignored = setOf("vault.owner-check"),
     )
+
+    @Test
+    fun anIgnoredTypeStartsNoProbe() = runTest {
+        val w = watch(backgroundScope)
+        w.onNoAnswer("vault.owner-check")
+        runCurrent()
+        assertEquals(0, probes)
+    }
+
+    @Test
+    fun noProbeWhenTheVaultClosesBeforeItRuns() = runTest {
+        val w = watch(backgroundScope)
+        w.onNoAnswer("item.list")
+        watching = false // a lock between the signal and the probe's start
+        runCurrent()
+        assertEquals(0, probes)
+    }
 
     @Test
     fun oneUnansweredRequestStartsOneProbe() = runTest {

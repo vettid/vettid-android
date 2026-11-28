@@ -1210,15 +1210,19 @@ class VaultManager(
      * The owner check's probe finds out, and shows the vault locked when the member API says so ([VaultGoneWatch]).
      */
     private val vaultGone by lazy {
+        val gate = VaultGoneGate(
+            phase = { phaseFlow.value },
+            activityStarted = { heldBack.uiStartedNow },
+            unlockInFlight = { unlockNotices.inFlight() },
+            openings = { lockNotices.openings },
+            checkScreenProbing = { ownerCheck.screenProbing },
+        )
         VaultGoneWatch(
             scope,
-            // In front: an activity is started (false in a process a push or the service started, until one starts).
-            watching = { phaseFlow.value == AppPhase.Unlocked && heldBack.uiStartedNow },
-            // Applied only while still open here and no unlock is under way (its result is newer than the API's word).
+            watching = gate::watching,
             probe = {
-                ownerCheck.probeVault(lockCauseKnown = false) {
-                    phaseFlow.value == AppPhase.Unlocked && !unlockNotices.inFlight()
-                } == VaultProbe.LOCKED
+                val mark = gate.begin()
+                ownerCheck.probeVault(lockCauseKnown = false) { gate.mayLock(mark) } == VaultProbe.LOCKED
             },
             elapsedMs = { android.os.SystemClock.elapsedRealtime() },
             // The owner check's own request: its screen probes for itself, knowing the cause.

@@ -31,10 +31,16 @@ class LockNotices(opened: Instant? = null, private val current: () -> String? = 
 
     /** A successful unlock answered at [at] (the result's inner `ts`; null: unknown, nothing changes). */
     fun opened(at: Instant?) {
+        openingsSeen.incrementAndGet() // an unlock answered, whatever its time: a lock judged before it is stale
         if (at == null) return
         val prev = openedAt
         if (prev == null || at.isAfter(prev)) openedAt = at
     }
+
+    private val openingsSeen = java.util.concurrent.atomic.AtomicLong()
+
+    /** How many unlock results were taken ([opened]): a lock found before the count moved is not later than the unlock (§11.4). */
+    val openings: Long get() = openingsSeen.get()
 
     /** Whether [m] is a `vault.locking` from before the vault last opened here (or, by its name, of another opening). */
     fun stale(m: VaultMessage): Boolean {

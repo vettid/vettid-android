@@ -392,7 +392,19 @@ class OwnerCheckManager(
         reconnects.tryEmit(Unit)
     }
 
-    override suspend fun probeVault(lockCauseKnown: Boolean): VaultProbe = probeVault(lockCauseKnown) { true }
+    override suspend fun probeVault(lockCauseKnown: Boolean): VaultProbe {
+        screenProbes.incrementAndGet()
+        try {
+            return probeVault(lockCauseKnown) { true }
+        } finally {
+            screenProbes.decrementAndGet()
+        }
+    }
+
+    private val screenProbes = java.util.concurrent.atomic.AtomicInteger()
+
+    /** Whether the owner check's screens run a probe of their own ([probeVault] without a guard), knowing the lock's cause. */
+    val screenProbing: Boolean get() = screenProbes.get() > 0
 
     override suspend fun probeVault(lockCauseKnown: Boolean, mayLock: () -> Boolean): VaultProbe {
         val started = epoch.get()

@@ -1310,6 +1310,32 @@ class OwnerCheckManagerTest {
         assertFalse(m.lockedByOwnerCheck.value)
     }
 
+    /**
+     * (#19721 b′, Fable's race) The vault-gone probe's API read says `locked` (true when read: an unlock locks first) while an
+     * unlock begins, is answered and ends; the owner check's epoch has not moved yet (it moves later, at the opening). The
+     * gate's mark (the unlock results taken) has: the lock is not applied, and nothing is marked.
+     */
+    @Test
+    fun aVaultGoneProbeDropsALockOverAnUnlockAnsweredMeanwhile() = runTest {
+        val ops = opsAt(1).apply { failStatus = true }
+        val m = manager(ops)
+        val notices = LockNotices()
+        val hold = UnlockNoticeHold()
+        val gate = VaultGoneGate({ AppPhase.Unlocked }, { true }, { hold.inFlight() }, { notices.openings }, { m.screenProbing })
+        memberState = "locked"
+        memberGate = kotlinx.coroutines.CompletableDeferred()
+        val mark = gate.begin()
+        val late = this.async(Dispatchers.Default) { m.probeVault(lockCauseKnown = false) { gate.mayLock(mark) } }
+        Thread.sleep(200)
+        val ticket = hold.begin()
+        notices.opened(java.time.Instant.parse("2026-10-07T12:00:00Z"))
+        ticket.end()
+        memberGate!!.complete(Unit)
+        assertEquals(VaultProbe.NO_ANSWER, late.await())
+        assertFalse(m.lockedByOwnerCheck.value)
+        assertEquals(0, foundLocked)
+    }
+
     /** A lock by the member during a read drops the read's result (the epoch moved). */
     @Test
     fun aProbeThatFinishesAfterTheMembersLockIsDropped() = runTest {

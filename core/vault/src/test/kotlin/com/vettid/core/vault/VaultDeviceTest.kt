@@ -5307,6 +5307,13 @@ class VaultDeviceTest {
             val retried = runCatching { d.request("device.list", timeout = java.time.Duration.ofMillis(300)) }.exceptionOrNull()
             assertTrue("$retried", retried is VaultStateException)
             assertEquals(listOf("vault.status", "device.list"), told.toList())
+
+            // A request under an id of its own (a credential operation's path), after its retries: told too.
+            val withId = runCatching {
+                d.requestWithId(d.newId(), "credential.version", buildJsonObject {}, timeout = java.time.Duration.ofMillis(300))
+            }.exceptionOrNull()
+            assertTrue("$withId", withId is VaultStateException)
+            assertEquals(listOf("vault.status", "device.list", "credential.version"), told.toList())
         }
     }
 

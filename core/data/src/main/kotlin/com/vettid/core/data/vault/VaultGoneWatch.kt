@@ -30,12 +30,7 @@ internal class VaultGoneWatch(
 
     /** A request of [type] got no answer. */
     fun onNoAnswer(type: String) {
-        val now = elapsedMs()
-        val last = lastProbeMs.get()
-        val recent = last != Long.MIN_VALUE && now - last < PROBE_EVERY_MS
-        if (type in ignored || recent || !watching()) return
-        if (!probing.compareAndSet(false, true)) return // one at a time; its own unanswered status read lands here
-        lastProbeMs.set(now)
+        if (type in ignored || !watching() || !claim()) return
         scope.launch {
             try {
                 if (watching()) probe()
@@ -43,6 +38,17 @@ internal class VaultGoneWatch(
                 probing.set(false)
             }
         }
+    }
+
+    /** Takes the probe's slot: none running and the last at least [PROBE_EVERY_MS] ago, checked and taken at once. */
+    @Synchronized
+    private fun claim(): Boolean {
+        val now = elapsedMs()
+        val last = lastProbeMs.get()
+        if (last != Long.MIN_VALUE && now - last < PROBE_EVERY_MS) return false
+        if (!probing.compareAndSet(false, true)) return false // one at a time; its own unanswered status read lands here
+        lastProbeMs.set(now)
+        return true
     }
 
     companion object {
