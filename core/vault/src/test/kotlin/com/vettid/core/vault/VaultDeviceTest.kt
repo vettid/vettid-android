@@ -5374,6 +5374,15 @@ class VaultDeviceTest {
             )
             runCatching { d.handle(v.msg(v.keyring.current()!!.seal(expired))) }
             assertEquals("an expired message", 3, heard)
+
+            // An event left on the relay by a hold is not told; its redelivery after the hold is, once.
+            d.holdEvents()
+            val held = v.seal("message.new", """{"connection_id":"c1","message_id":"m9","direction":"in","text":"held","sent_at":"x"}""")
+            runCatching { d.handle(held) }
+            assertEquals("an event the hold leaves for later", 3, heard)
+            d.endHold(deliver = true)
+            d.handle(held)
+            assertEquals("its redelivery after the hold", 4, heard)
         }
     }
 

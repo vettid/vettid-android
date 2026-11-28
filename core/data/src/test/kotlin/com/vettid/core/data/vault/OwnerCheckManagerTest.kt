@@ -1343,6 +1343,36 @@ class OwnerCheckManagerTest {
         assertEquals(0, foundLocked)
     }
 
+    /** (#19721 step 4) The facts a probe reports: whether the member API answered, a refused lock, a stale result. */
+    @Test
+    fun aProbesFactsSayWhatItLearnt() = runTest {
+        val ops = opsAt(1).apply { failStatus = true }
+        val m = manager(ops)
+        // Stale (first: memberAsked is this test's one wait): the member's lock during the API's read.
+        memberState = "locked"
+        memberGate = kotlinx.coroutines.CompletableDeferred()
+        val late = this.async(Dispatchers.Default) { m.probeVaultFacts(false) { true } }
+        kotlinx.coroutines.withContext(Dispatchers.Default) { kotlinx.coroutines.withTimeout(10_000) { memberAsked.await() } }
+        m.onLockedHere()
+        memberGate!!.complete(Unit)
+        assertEquals(ProbeFacts(VaultProbe.NO_ANSWER, apiAnswered = true, stale = true), late.await())
+        memberGate = null
+        memberState = null // the API's read failed
+        assertEquals(ProbeFacts(VaultProbe.NO_ANSWER, apiAnswered = false), m.probeVaultFacts(false) { true })
+        memberState = "unlocked"
+        assertEquals(ProbeFacts(VaultProbe.NO_ANSWER, apiAnswered = true), m.probeVaultFacts(false) { true })
+        memberState = "locked"
+        assertEquals(ProbeFacts(VaultProbe.NO_ANSWER, apiAnswered = true, refused = true), m.probeVaultFacts(false) { false })
+        assertFalse(m.lockedByOwnerCheck.value)
+        // The vault answered: OPEN, with no API read (a manager whose status read answers).
+        val answering = manager(Ops().apply { status = OwnerCheckStatus("held", "2026-10-06T11:00:00Z", 86_400, failures = 4) })
+        // Real time: the status read runs on the IO dispatcher and wins against the 5 s timeout.
+        assertEquals(
+            ProbeFacts(VaultProbe.OPEN, apiAnswered = false),
+            kotlinx.coroutines.withContext(Dispatchers.Default) { answering.probeVaultFacts(false) { true } },
+        )
+    }
+
     /** (#19721 b′) [OwnerCheckManager.screenProbing] is true while a screen's own probe runs, and false once it ended. */
     @Test
     fun screenProbingIsTrueOnlyWhileAScreensProbeRuns() = runTest {

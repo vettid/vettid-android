@@ -52,15 +52,10 @@ class VaultGoneWiringTest {
         val w = block("private val vaultGone by lazy {")
         w.has("watching = gate::watching,")
         w.has("val mark = gate.begin()")
-        val probe = "val found = ownerCheck.probeVault(lockCauseKnown = false) { gate.mayLock(mark)"
-        assertTrue("the probe locks only through the gate", w.any { it.startsWith(probe) })
-        assertTrue(
-            "an unanswered probe that asked nobody is not counted",
-            w.any { it.contains("memberStateReads.get() == reads") && it.contains("refused") },
-        )
+        // What it counts for is VaultGoneGate.counted's (VaultGoneGateTest), from the probe's own facts.
+        w.has("VaultGoneGate.counted(ownerCheck.probeVaultFacts(lockCauseKnown = false) { gate.mayLock(mark) })")
         w.has("elapsedMs = { android.os.SystemClock.elapsedRealtime() },")
         w.has("ignored = setOf(VaultApi.TYPE_OWNER_CHECK),")
-        assertTrue("a member API read that answered is counted", code.any { it.contains("memberStateReads.incrementAndGet()") })
     }
 
     @Test
@@ -108,15 +103,14 @@ class VaultGoneWiringTest {
             "suspend fun opened(afterMissedClose: Boolean) {",
             "unlockAgainHold.opened(stillOpen = phaseFlow.value == AppPhase.Unlocked)",
         )
-        inBlock("private suspend fun evaluate(): AppPhase = guard {", "unlockAgainHold.holds")
-        inBlock("private fun takesEvents(): Boolean", "unlockAgainHold.holds")
-        assertTrue(
-            "a wipe, a sign-out, a deletion or a setup ends it",
-            uses.any {
-                it.contains("AppPhase.SignedOut") && it.contains("AppPhase.Setup") && it.contains("AppPhase.Deleting") &&
-                    it.endsWith("unlockAgainHold.forgotten()")
-            },
+        // The decisions themselves are UnlockAgainHold's pure functions (UnlockAgainHoldTest).
+        inBlock(
+            "private suspend fun evaluate(): AppPhase = guard {",
+            "UnlockAgainHold.opens(VaultDeletion.statusUnlocked(st.state), unlockAgainHold.holds)",
         )
+        inBlock("private fun takesEvents(): Boolean", "UnlockAgainHold.takesEvents(lockGuard.takesEvents(), unlockAgainHold.holds)")
+        // Every phase is told to the hold, which decides (UnlockAgainHoldTest.onlySignedOutAndASetupEndIt).
+        code.has("unlockAgainHold.onPhase(p)")
         // The unlock's result ends it and restarts the count before the phase is published.
         val u = block("private suspend fun unlockStepHeld(")
         val cleared = u.indexOfFirst { it.contains("unlockAgainHold.unlockOk()") }

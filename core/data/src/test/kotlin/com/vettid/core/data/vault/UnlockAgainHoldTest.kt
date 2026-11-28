@@ -39,13 +39,48 @@ class UnlockAgainHoldTest {
         assertFalse(h.holds)
     }
 
-    /** A wipe, a sign-out or a deletion: the next vault on this phone (a transfer in, a new setup) is not held. */
+    /**
+     * Only SignedOut (a wipe, a sign-out, a deletion's end) and a setup stage end it. Every other phase keeps it: Locked (the
+     * very lock Unlock again publishes), Unreachable, Starting, Unlocked (an opening ends it through [UnlockAgainHold.opened]
+     * only), and Deleting (a member API 410, which a later status can take back to Locked).
+     */
     @Test
-    fun theVaultLeavingThisPhoneEndsIt() {
-        val h = UnlockAgainHold()
-        h.ask {}
-        h.forgotten()
-        assertFalse(h.holds)
+    fun onlySignedOutAndASetupEndIt() {
+        val ends = listOf<AppPhase>(AppPhase.SignedOut) + SetupStage.entries.map { AppPhase.Setup(it) }
+        val keeps = listOf(
+            AppPhase.Locked, AppPhase.Unlocked, AppPhase.Starting, AppPhase.Unreachable(FailureKind.NETWORK),
+            AppPhase.Deleting(), AppPhase.Deleting(apiOnly = true),
+        )
+        for (p in ends) {
+            val h = UnlockAgainHold()
+            h.ask {}
+            h.onPhase(p)
+            assertFalse("ends: $p", h.holds)
+        }
+        for (p in keeps) {
+            val h = UnlockAgainHold()
+            h.ask {}
+            h.onPhase(p)
+            assertTrue("keeps: $p", h.holds)
+        }
+    }
+
+    /** A status that says unlocked opens the app only while nothing is held; one that does not never does. */
+    @Test
+    fun aStatusOpensTheAppOnlyWhenUnlockedAndNotHeld() {
+        assertTrue(UnlockAgainHold.opens(statusUnlocked = true, held = false))
+        assertFalse(UnlockAgainHold.opens(statusUnlocked = true, held = true))
+        assertFalse(UnlockAgainHold.opens(statusUnlocked = false, held = false))
+        assertFalse(UnlockAgainHold.opens(statusUnlocked = false, held = true))
+    }
+
+    /** The vault's events are taken only as the lock guard allows, and never while held. */
+    @Test
+    fun eventsAreTakenOnlyAsTheLockGuardSaysAndNotWhileHeld() {
+        assertTrue(UnlockAgainHold.takesEvents(lockTakes = true, held = false))
+        assertFalse(UnlockAgainHold.takesEvents(lockTakes = true, held = true))
+        assertFalse(UnlockAgainHold.takesEvents(lockTakes = false, held = false))
+        assertFalse(UnlockAgainHold.takesEvents(lockTakes = false, held = true))
     }
 
     @Test
