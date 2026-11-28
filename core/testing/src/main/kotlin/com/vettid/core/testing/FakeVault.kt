@@ -876,9 +876,12 @@ class FakeVault(initial: AppPhase = AppPhase.SignedOut) :
     var lastHoldOff: HoldOff? = null
     var lastInterval: Long? = null
 
+    /** The wall clock a passed check's next deadline is counted from; a test on a virtual clock sets it to that clock. */
+    var clock: () -> Instant = Instant::now
+
     private fun passed(): OwnerCheckOutcome {
         ownerCheck.value = ownerCheck.value?.copy(
-            state = OwnerCheckState.OK, deadline = Instant.now().plusSeconds(86_400), failures = 0, waiting = null,
+            state = OwnerCheckState.OK, deadline = clock().plusSeconds(86_400), failures = 0, waiting = null,
         )
         return OwnerCheckOutcome.Passed
     }

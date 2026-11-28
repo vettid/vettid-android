@@ -39,7 +39,7 @@ class UnlockCancelRetryTest {
     fun aWrongPinOnTheCancelAsksForANewPin() = runTest {
         vault.unlockResults += UnlockAttempt.RecoveryPending
         vault.unlockResults += UnlockAttempt.BadPin(30)
-        val vm = UnlockViewModel(vault, vault, vault, FakeReleaseNotes())
+        val vm = unlockOnTestClock(vault)
         advanceUntilIdle()
         vm.setPin("40281795")
         vm.submit()
@@ -72,7 +72,7 @@ class UnlockCancelRetryTest {
     fun aFailedCancelAsksForThePinAgain() = runTest {
         vault.unlockResults += UnlockAttempt.RecoveryPending
         vault.unlockResults += UnlockAttempt.Failed(FailureKind.NO_RESPONSE, null)
-        val vm = UnlockViewModel(vault, vault, vault, FakeReleaseNotes())
+        val vm = unlockOnTestClock(vault)
         advanceUntilIdle()
         vm.setPin("40281795")
         vm.submit()
@@ -94,7 +94,7 @@ class UnlockCancelRetryTest {
         vault.unlockResults += UnlockAttempt.RecoveryPending
         vault.unlockResults += UnlockAttempt.BadPin(5)
         vault.unlockResults += UnlockAttempt.Backoff(60)
-        val vm = UnlockViewModel(vault, vault, vault, FakeReleaseNotes())
+        val vm = unlockOnTestClock(vault)
         advanceUntilIdle()
         vm.setPin("40281795")
         vm.submit()
@@ -120,7 +120,7 @@ class UnlockCancelRetryTest {
         vault.phoneSecret = true
         vault.unlockResults += UnlockAttempt.RecoveryPending
         vault.unlockResults += UnlockAttempt.BadPin(1)
-        val vm = UnlockViewModel(vault, vault, vault, FakeReleaseNotes())
+        val vm = unlockOnTestClock(vault)
         advanceUntilIdle()
         vm.setPin("40281795")
         vm.submit()
@@ -152,7 +152,7 @@ class UnlockCancelRetryTest {
         vault.pinChangeUnresolved.value = true
         vault.unlockResults += UnlockAttempt.RecoveryPending
         vault.unlockResults += UnlockAttempt.NewPinNeeded
-        val vm = UnlockViewModel(vault, vault, vault, FakeReleaseNotes())
+        val vm = unlockOnTestClock(vault)
         advanceUntilIdle()
         vm.setPin("40281795")
         vm.submit()
@@ -178,7 +178,7 @@ class UnlockCancelRetryTest {
         vault.ownerCheck.value =
             OwnerCheckView(OwnerCheckState.HELD, Instant.now().minusSeconds(60), 86_400, 0, hold = true, holdOffUntil = null)
         vault.unlockResults += UnlockAttempt.RecoveryPending
-        val vm = UnlockViewModel(vault, vault, vault, FakeReleaseNotes())
+        val vm = unlockOnTestClock(vault)
         advanceUntilIdle()
         assertTrue(vm.uiState.value.checkDue)
         vm.setPin("40281795")
@@ -201,7 +201,7 @@ class UnlockCancelRetryTest {
     fun nothingIsSentInsideTheWaitWithoutAPinOrByASubmit() = runTest {
         vault.unlockResults += UnlockAttempt.RecoveryPending
         vault.unlockResults += UnlockAttempt.BadPin(30)
-        val vm = UnlockViewModel(vault, vault, vault, FakeReleaseNotes())
+        val vm = unlockOnTestClock(vault)
         advanceUntilIdle()
         vm.setPin("40281795")
         vm.submit()
@@ -233,7 +233,7 @@ class UnlockCancelRetryTest {
     fun aFailedCancelSaysWhy() = runTest {
         vault.unlockResults += UnlockAttempt.RecoveryPending
         vault.unlockResults += UnlockAttempt.Failed(FailureKind.NO_RESPONSE, null)
-        val vm = UnlockViewModel(vault, vault, vault, FakeReleaseNotes())
+        val vm = unlockOnTestClock(vault)
         advanceUntilIdle()
         vm.setPin("40281795")
         vm.submit()
