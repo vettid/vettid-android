@@ -19,6 +19,17 @@ class LockNoticesTest {
 
     private fun msg(type: String, ts: Instant) = VaultMessage(Inner(id = Ulid.new(), type = type, ts = ts, body = "{}".toByteArray()))
 
+    /** (#19721 b′) Every unlock result taken moves [LockNotices.openings], one without a time too: the vault-gone probe's mark. */
+    @Test
+    fun everyUnlockResultMovesTheOpeningsOneWithoutATimeToo() {
+        val n = LockNotices()
+        val before = n.openings
+        n.opened(null)
+        assertTrue(n.openings == before + 1)
+        n.opened(Instant.parse("2026-10-07T12:00:00Z"))
+        assertTrue(n.openings == before + 2)
+    }
+
     @Test
     fun everyNoticeCountsBeforeTheFirstUnlock() {
         assertFalse(notices.stale(msg("vault.locking", t0)))
