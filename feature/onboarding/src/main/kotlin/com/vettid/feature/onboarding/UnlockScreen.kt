@@ -60,6 +60,9 @@ import java.time.format.FormatStyle
 @Composable
 fun UnlockRoute(viewModel: UnlockViewModel = hiltViewModel(), onOpenAccountSite: () -> Unit = {}) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
+    // (#19722) While the screen is started, the owner check's deadline is judged again as time passes.
+    androidx.lifecycle.compose.LifecycleEventEffect(androidx.lifecycle.Lifecycle.Event.ON_START) { viewModel.setVisible(true) }
+    androidx.lifecycle.compose.LifecycleEventEffect(androidx.lifecycle.Lifecycle.Event.ON_STOP) { viewModel.setVisible(false) }
     UnlockContent(state, viewModel, onOpenAccountSite)
 }
 

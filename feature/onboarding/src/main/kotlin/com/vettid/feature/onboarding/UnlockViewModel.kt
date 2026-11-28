@@ -24,6 +24,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
@@ -95,6 +96,16 @@ internal fun openedThenLocked(kind: FailureKind, code: String?): Boolean =
 
 /** Immutable UI state of the unlock screen. */
 private const val KEPT_MS_PER_SECOND = 1_000L
+
+/** (#19722) The longest wait before the owner check's times are judged again on the unlock screen. */
+internal const val JUDGE_STEP_MS = 30_000L
+
+/**
+ * (#19722) When the unlock screen judges [v] again after [now]: its deadline or its idle lock's time, the earlier of those
+ * still ahead; null when neither is (nothing more changes with time).
+ */
+internal fun nextJudgement(v: com.vettid.core.data.vault.OwnerCheckView?, now: Instant): Instant? =
+    listOfNotNull(v?.deadline, v?.idleLockAt).filter { it.isAfter(now) }.minOrNull()
 
 data class UnlockUiState(
     val loading: Boolean = true,
@@ -381,6 +392,18 @@ class UnlockViewModel @Inject constructor(
     )
     val uiState: StateFlow<UnlockUiState> = state.asStateFlow()
     private var ticker: Job? = null
+
+    /** (#19722) Whether the screen is started ([setVisible]): only then is the owner check judged again as time passes. */
+    private val visible = MutableStateFlow(false)
+
+    /** The screen's ON_START (true) and ON_STOP (false). */
+    fun setVisible(shown: Boolean) {
+        visible.value = shown
+    }
+
+    /** The wall clock the owner check's times are judged against; tests set a virtual one before the first collection. */
+    @androidx.annotation.VisibleForTesting
+    internal var clock: () -> Instant = Instant::now
     private var serviceTicker: Job? = null
     private var notesJob: Job? = null
 
@@ -414,19 +437,30 @@ class UnlockViewModel @Inject constructor(
         viewModelScope.launch {
             combine(
                 ownerCheck.ownerCheck, ownerCheck.lockedByOwnerCheck, ownerCheck.idleLocked, ownerCheck.lockCauseUnknown,
-            ) { v, locked, _, unknown ->
-                Triple(v?.gated(Instant.now()) == true, locked to unknown, ownerCheck.idleLockedNow(Instant.now()))
-            }.collect { (due, lock, idle) ->
-                val (locked, unknown) = lock
-                // (ANDROID-PLAN 0.1.95) A lock found by a read, cause unknown: locked, but not "ten wrong checks".
-                // The password is asked for only what is used: a lock of unknown cause is not a check that is due (ask only what is used).
-                state.update {
-                    it.copy(
-                        checkDue = due || (locked && !unknown) || idle != null, lockedByOwnerCheck = locked && !unknown,
-                        idleLocked = idle,
-                    )
+            ) { v, locked, _, unknown -> Triple(v, locked, unknown) }
+                .combine(visible) { t, shown -> t to shown }
+                .collectLatest { (t, shown) ->
+                    val (v, locked, unknown) = t
+                    // (#19722) Judged again when the deadline or the idle lock's time passes while the screen is shown,
+                    // and at each return to it: the view is kept across a lock, but the time it is judged at moves on.
+                    while (true) {
+                        val now = clock()
+                        val due = v?.gated(now) == true
+                        val idle = ownerCheck.idleLockedNow(now)
+                        // (ANDROID-PLAN 0.1.95) A lock found by a read, cause unknown: locked, but not "ten wrong checks".
+                        // The password is asked for only what is used: a lock of unknown cause is not a check that is due.
+                        state.update {
+                            it.copy(
+                                checkDue = due || (locked && !unknown) || idle != null, lockedByOwnerCheck = locked && !unknown,
+                                idleLocked = idle,
+                            )
+                        }
+                        // Away from the screen nothing waits: a return judges again.
+                        val next = nextJudgement(v, now)?.takeIf { shown } ?: break
+                        // In steps of at most [JUDGE_STEP_MS]: a delay does not run in deep sleep, the deadline's clock does.
+                        delay(java.time.Duration.between(now, next).toMillis().coerceIn(1, JUDGE_STEP_MS))
+                    }
                 }
-            }
         }
     }
 
