@@ -48,13 +48,12 @@ internal class VaultGoneWatch(
 
     /** A request of [type] got no answer. */
     fun onNoAnswer(type: String) {
-        if (type in ignored || !watching() || !claim()) return
+        if (type in ignored || !watching()) return
+        // The mark with the slot: a message from here on voids this probe's result.
+        val at = claim() ?: return
         scope.launch {
             try {
-                if (watching()) {
-                    val at = markNow()
-                    counted(at, probe())
-                }
+                if (watching()) counted(at, probe())
             } finally {
                 probing.set(false)
             }
@@ -66,7 +65,8 @@ internal class VaultGoneWatch(
      * and no probe runs (one running then counts for nothing).
      */
     fun heard() {
-        if (unanswered == 0 && !silentFlow.value && !probing.get()) return
+        // [probing] first: a probe's count is written before its slot is let go, so one that ended meanwhile is seen.
+        if (!probing.get() && unanswered == 0 && !silentFlow.value) return
         reset()
     }
 
@@ -77,9 +77,6 @@ internal class VaultGoneWatch(
         unanswered = 0
         silentFlow.value = false
     }
-
-    @Synchronized
-    private fun markNow(): Long = mark
 
     @Synchronized
     private fun counted(at: Long, found: VaultProbe) {
@@ -94,16 +91,19 @@ internal class VaultGoneWatch(
         }
     }
 
-    /** Takes the probe's slot: none running and the last at least [PROBE_EVERY_MS] ago, checked and taken at once. */
+    /**
+     * Takes the probe's slot: none running and the last at least [PROBE_EVERY_MS] ago, checked and taken at once; the
+     * mark it is taken under, or null.
+     */
     @Synchronized
-    private fun claim(): Boolean {
+    private fun claim(): Long? {
         val now = elapsedMs()
         val last = lastProbeMs.get()
         val due = last == Long.MIN_VALUE || now - last >= PROBE_EVERY_MS
         // One at a time; the probe's own unanswered status read lands here.
         val claimed = due && probing.compareAndSet(false, true)
         if (claimed) lastProbeMs.set(now)
-        return claimed
+        return if (claimed) mark else null
     }
 
     companion object {

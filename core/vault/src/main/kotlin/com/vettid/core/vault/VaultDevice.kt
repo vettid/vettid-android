@@ -904,11 +904,17 @@ class VaultDevice private constructor(
     var onNoAnswer: ((type: String) -> Unit)? = null
 
     /**
-     * (#19721 step 4) Told each time a message from the vault opened under its session (an answer or an event): the vault
-     * is there. Called under the device's lock, so it must be quick and must not call back into the device.
+     * (#19721 step 4) Told each time a fresh message from the vault was taken in: an answer or an event that opened under
+     * its session and passed its time check and the dedupe, a rekey's `hs.init`, or a rekey's verified `hs.fin`: the vault
+     * is there. Not for a stale, late or redelivered message. Called under the device's lock, so it must be quick and must
+     * not call back into the device.
      */
     @Volatile
     var onHeard: (() -> Unit)? = null
+
+    private fun heard() {
+        runCatching { onHeard?.invoke() }
+    }
 
     private fun noAnswer(type: String): VaultStateException {
         runCatching { onNoAnswer?.invoke(type) }
@@ -2618,13 +2624,13 @@ class VaultDevice private constructor(
             noteKeyTime(fr.inner.ts) // its ts passed checkTime; the keys' clock only
             // §6.3.1 "Responder": activated at the verified hs.fin; hs.confirm and device.features queued in the same write.
             activateRekeyLocked(fr.epoch, t)
+            heard()
             awaiting.remove(r)
             queueConfirmedLocked(t)
             return
         }
         val (inner, ep) = opened
         refusalCount.value = 0 // the vault spoke to this device under its session
-        runCatching { onHeard?.invoke() }
         // §6.3.1: any message but hs.fin tells which epoch the vault uses (a redelivered hs.fin of an active epoch opens here,
         // and confirms nothing: the initiator may abandon an epoch right after its hs.fin).
         if (inner.type != HsTypes.FIN) noteConfirmedLocked(ep, t, inner.ts)
@@ -2646,6 +2652,8 @@ class VaultDevice private constructor(
         }
         noteVaultTime(inner.ts)
         if (st.seenInner.containsKey(inner.id)) return
+        // Past its time check and the dedupe: a stale message or a redelivered one says nothing of the vault now.
+        heard()
         // During a hold, an event (not an answer, not the session's own messages) is left on the relay: nothing of it is
         // recorded, so it is handled in full when it comes again.
         if (inner.re == null && inner.type !in SESSION_TYPES && leaveForLater(inner.type)) throw LeftForLater()
@@ -2942,6 +2950,7 @@ class VaultDevice private constructor(
      * it would leave this device unable to read anything the vault sends from then on.
      */
     private suspend fun handleRekey(raw: ByteArray, ep: Epoch, sender: ByteArray, t: Instant, initId: String, ts: Instant) {
+        heard() // the vault started a rekey
         // An hs.init answered before: the vault deposited it again (a new msg_id, §6.5; the relay's own
         // redelivery of the same msg_id is dropped by `seen`, saved with the responder). §6.5: acked and dropped, never a
         // second responder. Only while its hs.resp may not have reached the relay is that hs.resp deposited again, the same

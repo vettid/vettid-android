@@ -5318,8 +5318,8 @@ class VaultDeviceTest {
     }
 
     /**
-     * (#19721 step 4) Each message that opens under the vault's session is told ([VaultDevice.onHeard]): an answer and an
-     * event alike; one that does not open (not sealed to this device's keys) is not.
+     * (#19721 step 4) Each fresh message from the vault is told ([VaultDevice.onHeard]): an answer and an event alike; one
+     * that does not open, a redelivered copy and a stale one are not.
      */
     @Test
     fun eachMessageFromTheVaultIsToldAndOneThatDoesNotOpenIsNot() = runBlocking<Unit> {
@@ -5336,6 +5336,19 @@ class VaultDeviceTest {
             d.handle(v.seal("vault.status", "{}", re = req.id, status = Inner.STATUS_OK))
             assertTrue(asking.await().isSuccess)
             assertEquals("an answer", 2, heard)
+
+            // A redelivered copy (the same inner id under a new relay message) and a stale message say nothing of the vault now.
+            val id = Ulid.new()
+            d.handle(v.seal("device.pair.rejected", "{}", id = id))
+            assertEquals(3, heard)
+            d.handle(v.seal("device.pair.rejected", "{}", id = id))
+            assertEquals("a redelivered copy", 3, heard)
+            val expired = Inner(
+                id = Ulid.new(), type = "device.pair.rejected", ts = Instant.now().minusSeconds(120),
+                exp = Instant.now().minusSeconds(60), body = "{}".toByteArray(),
+            )
+            runCatching { d.handle(v.msg(v.keyring.current()!!.seal(expired))) }
+            assertEquals("an expired message", 3, heard)
         }
     }
 

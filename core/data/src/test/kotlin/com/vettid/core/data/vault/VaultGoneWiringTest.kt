@@ -73,14 +73,39 @@ class VaultGoneWiringTest {
         f.has("combine(vaultGone.silent, phase) { silent, p -> silent && p == AppPhase.Unlocked }")
     }
 
-    /** "Unlock again" shows the unlock screen as the member's own lock here does, sends no lock, and only while silent. */
+    /**
+     * "Unlock again" shows the unlock screen as the member's own lock here does, sends no lock, and only while the watch is
+     * silent and the vault open (read directly, not through the derived flow).
+     */
     @Test
     fun unlockAgainShowsTheUnlockScreenOnlyWhileSilentAndSendsNothing() {
         val u = block("override fun unlockAgain() {")
-        assertTrue("first: only while silent", u[1] == "if (!vaultSilent.value) return")
+        val first = "if (!vaultGone.silent.value || phaseFlow.value != AppPhase.Unlocked) return"
+        assertTrue("first: only while silent and open", u[1] == first)
+        u.has("unlockAgainAsked = true")
+        u.has("vaultGone.reset()")
         u.has("markLockedHere()")
         u.has("ownerCheck.onLockedHere()")
         u.has("lockedByNotice()")
         assertTrue("no lock sent", u.none { it.contains("lockKeeper") || it.contains("lockWith") || it.contains("beginLock") })
+    }
+
+    /** A refresh after "Unlock again" keeps the phone locked although the member API still says unlocked. */
+    @Test
+    fun aRefreshAfterUnlockAgainStaysLocked() {
+        block("private suspend fun evaluate(): AppPhase = guard {")
+            .has("if (!VaultDeletion.statusUnlocked(st.state) || unlockAgainAsked) AppPhase.Locked else afterUnlocked(s)")
+    }
+
+    /** The unlock's sealed ok result ends "Unlock again" and restarts the count before the phase is published. */
+    @Test
+    fun theUnlocksResultEndsUnlockAgainBeforeItOpens() {
+        val u = block("private suspend fun unlockStepHeld(")
+        val opened = u.indexOf("lockNotices.opened(r.at)")
+        val cleared = u.indexOf("unlockAgainAsked = false")
+        val reset = u.indexOf("vaultGone.reset()")
+        val publish = u.indexOfFirst { it.startsWith("openAfterUnlock(") }
+        assertTrue("$opened $cleared $reset $publish", opened in 0 until cleared && cleared < reset && reset < publish)
+        block("suspend fun opened(afterMissedClose: Boolean) {").has("unlockAgainAsked = false")
     }
 }

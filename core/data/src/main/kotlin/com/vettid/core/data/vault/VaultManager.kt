@@ -943,12 +943,25 @@ class VaultManager(
      * notice is up.
      */
     override fun unlockAgain() {
-        if (!vaultSilent.value) return
+        // The watch and the phase themselves, not [vaultSilent] (derived on the scope, it can lag a lock just published).
+        if (!vaultGone.silent.value || phaseFlow.value != AppPhase.Unlocked) return
+        // Locked here until this phone's next unlock opens the vault: the member API still says unlocked ([evaluate]).
+        unlockAgainAsked = true
+        // The next opening starts from no unanswered probe, without a moment of the notice.
+        vaultGone.reset()
         // Not "Your vault is locked" or "locked itself" on the unlock screen: the member asked for it here.
         markLockedHere()
         ownerCheck.onLockedHere()
         lockedByNotice()
     }
+
+    /**
+     * (#19721 step 4) Set by [unlockAgain], cleared by an unlock's sealed `ok` result: until then [evaluate] keeps this phone
+     * locked, since the member API counts the vault that did not answer as running (`unlocked`). Memory only: a new process
+     * goes by the status again (the notice comes back after two more probes if the vault still does not answer).
+     */
+    @Volatile
+    private var unlockAgainAsked = false
 
     /** `vault.locking` notices from before the vault last opened are dropped ([LockNotices]). */
     /** (#244 review B3) `vault.locking` received during an unlock, judged after it. */
@@ -1345,8 +1358,10 @@ class VaultManager(
             // An opening's steps ([PhaseSteps.onPhase]); [afterMissedClose]: a close conflated into it cleared its lists first.
             suspend fun opened(afterMissedClose: Boolean) {
                 lockedHere = false
-                // (#19721 step 4) Each opening counts unanswered probes from none.
+                // (#19721 step 4) Each opening counts unanswered probes from none, and ends an "Unlock again" (an opening by a
+                // path other than the unlock's sealed result, which ended it already).
                 vaultGone.reset()
+                unlockAgainAsked = false
                 lockedElsewhereFlow.value = false
                 // First: events delivered from here on update the state it reopens (a throw below cannot skip it).
                 social.reopen() // the pending.list read below may merge again
@@ -2361,7 +2376,7 @@ class VaultManager(
         // never gets here: it fails as a malformed answer (MemberApiClient.vaultStatusAnswer).
         if (st == null) return@guard AppPhase.Unreachable(FailureKind.NO_VAULT)
         if (d.recovering) return@guard AppPhase.Setup(SetupStage.RECOVERING) // paired, the credential not recovered yet
-        if (!VaultDeletion.statusUnlocked(st.state)) AppPhase.Locked else afterUnlocked(s)
+        if (!VaultDeletion.statusUnlocked(st.state) || unlockAgainAsked) AppPhase.Locked else afterUnlocked(s)
     }
 
     @Suppress("ReturnCount")
@@ -2937,6 +2952,10 @@ class VaultManager(
         if (moved && !followMove) return StepOutcome(UnlockAttempt.Success, moved = true)
         // The vault is open as of the result's ts: a vault.locking from before it is stale (LockNotices).
         lockNotices.opened(r.at)
+        // (#19721 step 4) The vault answered this unlock: "Unlock again" is done, and unanswered probes count from none,
+        // before the phase is published (no moment of the notice).
+        unlockAgainAsked = false
+        vaultGone.reset()
         // (N4) `at` is the sealed result's inner `ts` (VaultDevice.openUnlockResult), so every vault release gives it. A
         // result without it would move nothing: the unlock's own notice, judged against the previous opening, would not be
         // stale and would overtake this unlock (fail secure: Locked, and the screen says the vault did not open).

@@ -194,6 +194,18 @@ class VaultGoneWatchTest {
         assertFalse("one in a row only", w.silent.value)
     }
 
+    /** A message after the request went unanswered but before its probe starts voids that probe too (the mark is the slot's). */
+    @Test
+    fun aMessageBeforeTheProbeStartsVoidsIt() = runTest {
+        val w = watch(backgroundScope)
+        probeOnce(w)
+        w.onNoAnswer("item.list")
+        w.heard() // the probe is launched, not run yet
+        runCurrent()
+        assertEquals(2, probes)
+        assertFalse(w.silent.value)
+    }
+
     @Test
     fun aProbeDuringWhichTheVaultOpenedAgainCountsForNothing() = runTest {
         val w = watch(backgroundScope)
