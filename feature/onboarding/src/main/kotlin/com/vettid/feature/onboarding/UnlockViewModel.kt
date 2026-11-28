@@ -384,7 +384,7 @@ interface UnlockActions {
 class UnlockViewModel @Inject constructor(
     private val vault: VaultRepository,
     private val account: AccountRepository,
-    ownerCheck: OwnerCheckRepository,
+    private val ownerCheck: OwnerCheckRepository,
     private val releaseNotes: ReleaseNotesRepository,
 ) : ViewModel(), UnlockActions {
     private val state = MutableStateFlow(
@@ -396,12 +396,19 @@ class UnlockViewModel @Inject constructor(
     /** (#19722) Whether the screen is started ([setVisible]): only then is the owner check judged again as time passes. */
     private val visible = MutableStateFlow(false)
 
+    /** Whether the daily check is due at [now] by the time it is judged on: the deadline passed, or the idle lock's time. */
+    private fun dueAt(now: Instant): Boolean =
+        ownerCheck.ownerCheck.value?.gated(now) == true || ownerCheck.idleLockedNow(now) != null
+
     /** The screen's ON_START (true) and ON_STOP (false). */
     fun setVisible(shown: Boolean) {
         visible.value = shown
     }
 
-    /** The wall clock the owner check's times are judged against; tests set a virtual one before the first collection. */
+    /**
+     * The wall clock the owner check's times are judged against; tests set a virtual one before the first collection. A
+     * test that calls [setVisible] with a deadline ahead must set it: with the real clock, virtual delays never reach it.
+     */
     @androidx.annotation.VisibleForTesting
     internal var clock: () -> Instant = Instant::now
     private var serviceTicker: Job? = null
@@ -574,6 +581,12 @@ class UnlockViewModel @Inject constructor(
     private fun attempt(cancelRecovery: Boolean) {
         val s = state.value
         if (!s.submitAllowed || s.erasing) return
+        // (#19722) Judged again at the tap: a check that came due since the screen last judged asks for the password first,
+        // and nothing is sent yet.
+        if (!s.checkDue && dueAt(clock())) {
+            state.update { it.copy(checkDue = true) }
+            return
+        }
         state.update { it.copy(busy = true, message = null) }
         viewModelScope.launch {
             // The PIN only unlocks (Rule 3): the update is approved on the release gate's own screen once the vault is open.

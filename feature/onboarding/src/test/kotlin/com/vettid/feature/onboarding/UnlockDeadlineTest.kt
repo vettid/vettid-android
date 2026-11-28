@@ -80,15 +80,37 @@ class UnlockDeadlineTest {
     /** The idle lock's time passing says why the vault locked itself, as the deadline does. */
     @Test
     fun anIdleLockTimePassingIsJudgedToo() = runTest {
-        vault.ownerCheck.value = okUntil(start.minusSeconds(60), idleLockAt = start.plusSeconds(120))
+        // The deadline still ahead: only the idle lock's time can make the check due here.
+        vault.ownerCheck.value = okUntil(start.plusSeconds(86_400), idleLockAt = start.plusSeconds(120))
         val vm = unlock()
         vm.setVisible(true)
         runCurrent()
         assertNull(vm.uiState.value.idleLocked)
+        assertFalse(vm.uiState.value.checkDue)
         advanceTimeBy(120_000 + JUDGE_STEP_MS)
         runCurrent()
         assertTrue(vm.uiState.value.idleLocked != null)
+        assertTrue("the password with the PIN", vm.uiState.value.checkDue)
         vm.setVisible(false)
+    }
+
+    /** A tap just past the deadline, before the screen judged again: the password is asked for, and nothing is sent. */
+    @Test
+    fun aTapPastTheDeadlineAsksForThePasswordFirst() = runTest {
+        vault.ownerCheck.value = okUntil(start.plusSeconds(600))
+        val vm = unlock() // not shown: nothing judges again by itself
+        runCurrent()
+        vm.setPin("40281795")
+        assertTrue(vm.uiState.value.submitAllowed)
+        advanceTimeBy(600_000)
+        vm.submit()
+        runCurrent()
+        assertTrue(vm.uiState.value.checkDue)
+        assertFalse("nothing sent", vault.calls.any { it.startsWith("unlock") })
+        vm.setPassword("correct horse")
+        vm.submit()
+        runCurrent()
+        assertTrue("now the unlock with the check", vault.calls.any { it.startsWith("unlockWithCheck") })
     }
 
     @Test
